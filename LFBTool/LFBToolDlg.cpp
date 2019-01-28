@@ -363,3 +363,82 @@ void CLFBToolDlg::OnBnClickedRight()
 		GetDlgItem(IDC_RIGHT)->EnableWindow(TRUE);
 	}
 }
+/**************************************************************************
+## Function: ReadForLineEx  for open one big file and get line index
+## Author  :  water
+## Date    :  2019-01-28
+**************************************************************************/
+void CLFBToolDlg::ReadForLineEx()
+{
+	CFile g_xFile;
+	CFileException ex;
+	g_xFile.Open(strPath,CFile::modeRead,&ex);
+	char* x_Buff = new char[BUFFLEN];
+	LONGLONG x_iFileLength = 0;
+	LONGLONG x_ipos = 0;
+	
+	x_iFileLength = g_xFile.GetLength();
+	g_xFile.Seek(0,SEEK_CUR);
+	while (1)
+	{
+		if (x_ipos + BUFFLEN < x_iFileLength)
+		{
+			g_xFile.Read(x_Buff,BUFFLEN);
+			for (int i = 0; i < BUFFLEN; ++i)
+			{
+				if (x_Buff[i] == '\n')
+				{
+					g_iIndexList.push_back(x_ipos + i + 1);
+				}
+			}
+		}else{
+			int ilength = x_iFileLength - x_ipos;
+			LONGLONG iLast = 0;
+			g_xFile.Read(x_Buff,ilength);
+			for (int i = 0;i < ilength; ++i)
+			{
+				if (x_Buff[i] == '\n')
+				{
+					iLast = x_ipos + i + 1;
+					g_iIndexList.push_back(iLast);
+				}
+			}
+			if (iLast != x_iFileLength)
+			{
+				g_iIndexList.push_back(x_iFileLength);
+			}
+			break;
+		}
+		x_ipos += BUFFLEN;
+	}
+	delete [] x_Buff;
+	g_xFile.Close();
+}
+/**************************************************************************
+## Function: ReadForLineEx  for open one big file and get line index
+## Author  :  water
+## Date    :  2019-01-28
+**************************************************************************/
+void CLFBToolDlg::MapReadForLineEx()
+{
+	HANDLE hFile = CreateFile(strPath, GENERIC_READ , FILE_SHARE_READ , NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+	DWORD dwFileSize = GetFileSize(hFile, NULL);
+	HANDLE hMapFile = CreateFileMapping(hFile, NULL, PAGE_READWRITE, 0, dwFileSize,_T("MyMapppingFile"));
+	char* pData = (char*)MapViewOfFile(hMapFile, FILE_MAP_READ, 0, 0, 1024);
+	LONGLONG iLast = 0;
+	for (LONGLONG i = 0;i < dwFileSize; ++i)
+	{
+		if (pData[i] == '\n')
+		{
+			iLast = i + 1;
+			g_iIndexList.push_back(iLast);
+		}
+	}
+	if (iLast != dwFileSize)
+	{
+		g_iIndexList.push_back(dwFileSize);
+	}
+	UnmapViewOfFile(pData);
+	CloseHandle(hMapFile);
+	CloseHandle(hFile);
+}

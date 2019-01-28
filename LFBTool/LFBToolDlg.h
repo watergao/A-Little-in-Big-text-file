@@ -24,6 +24,8 @@ public:
 	vector<LONGLONG> g_iIndexList;
 	void InitDlgList();
 	void ReadForLine();
+	void ReadForLineEx();
+	void MapReadForLineEx();
 // й╣ож
 protected:
 	HICON m_hIcon;
