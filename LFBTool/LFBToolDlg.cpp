@@ -175,6 +175,7 @@ int CALLBACK BwsCallbackProc(HWND hwnd,UINT uMsg,LPARAM lParam,LPARAM lpData)
 	}
 	return 0;
 }
+
 /**************************************************************************
 ## Function: ReadForLine  for open one big file and get line index
 ## Author  :  water
@@ -182,16 +183,23 @@ int CALLBACK BwsCallbackProc(HWND hwnd,UINT uMsg,LPARAM lParam,LPARAM lpData)
 **************************************************************************/
 void CLFBToolDlg::ReadForLine()
 {
+	LONGLONG x_iFileLength = 0;
+	LONGLONG x_ipos = 0;
+	 HANDLE hFile = CreateFile(strPath, GENERIC_READ | GENERIC_WRITE,0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	// 得到文件尺寸
+	DWORD dwFileSizeHigh;
+	__int64 qwFileSize = GetFileSize(hFile, &dwFileSizeHigh);
+	qwFileSize |= (((__int64)dwFileSizeHigh) << 32);
+	__int64 qwFileSizeEx = qwFileSize;
+	x_iFileLength = qwFileSizeEx;
+	CloseHandle(hFile);
+	char* x_Buff = new char[BUFFLEN];
 	FILE* f = NULL;
 	if ((f = fopen(strPath,"r")) == NULL)
 	{
 		printf("open fail errno = %d\n", errno);
-	} 
-	char* x_Buff = new char[BUFFLEN];
-	LONGLONG x_iFileLength = 0;
-	LONGLONG x_ipos = 0;
-	fseek(f,0,SEEK_END);
-	x_iFileLength = ftell(f);
+		return;
+	}
 	fseek(f,0,0);
 	while (1)
 	{
@@ -238,11 +246,19 @@ void CLFBToolDlg::InitDlgList()
 	CStdioFile g_file;
 	CFileException ex;
 	g_file.Open(strPath,CFile::modeRead,&ex);
+	CString str("");
+	str.Format("%d",GetLastError());
+	MessageBox(str);
 	if (0 == iCurLine)
 	{
 		g_file.Seek(0,SEEK_SET);
 	}else{
-		g_file.Seek(g_iIndexList[iCurLine - 1],SEEK_SET);
+		if (iCurLine - 1 < 0)
+		{
+			iCurLine = 0;
+		}
+		LONG x = g_iIndexList[iCurLine - 1];
+		g_file.Seek(x,CFile::begin);
 	}
 	CString strtemp("");
 	int iTotalLine = g_iIndexList.size();
@@ -298,7 +314,9 @@ void CLFBToolDlg::OnBnClickedOk()
 	}
 	//deal with data
 	g_iIndexList.clear();
-	ReadForLine();
+	//ReadForLine();//slowly==>bug--file length wrong
+	//ReadForLineEx();//5 minutes ==>10G
+	MapReadForLineEx();
 	iCurLine = 0;
 	InitDlgList();
 	int iTotal = g_iIndexList.size();
@@ -421,24 +439,74 @@ void CLFBToolDlg::ReadForLineEx()
 **************************************************************************/
 void CLFBToolDlg::MapReadForLineEx()
 {
-	HANDLE hFile = CreateFile(strPath, GENERIC_READ , FILE_SHARE_READ , NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
-	DWORD dwFileSize = GetFileSize(hFile, NULL);
-	HANDLE hMapFile = CreateFileMapping(hFile, NULL, PAGE_READWRITE, 0, dwFileSize,_T("MyMapppingFile"));
-	char* pData = (char*)MapViewOfFile(hMapFile, FILE_MAP_READ, 0, 0, 1024);
 	LONGLONG iLast = 0;
-	for (LONGLONG i = 0;i < dwFileSize; ++i)
-	{
-		if (pData[i] == '\n')
-		{
-			iLast = i + 1;
-			g_iIndexList.push_back(iLast);
-		}
-	}
-	if (iLast != dwFileSize)
-	{
-		g_iIndexList.push_back(dwFileSize);
-	}
-	UnmapViewOfFile(pData);
-	CloseHandle(hMapFile);
+	HANDLE hFile = CreateFile(strPath, GENERIC_READ|GENERIC_WRITE,0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	HANDLE hMapFile = CreateFileMapping(hFile, NULL, PAGE_READWRITE, 0, 0,NULL);
+	// 得到系统分配粒度
+	SYSTEM_INFO SysInfo;
+	GetSystemInfo(&SysInfo);
+	DWORD dwGran = SysInfo.dwAllocationGranularity;
+
+	// 得到文件尺寸
+	DWORD dwFileSizeHigh;
+	__int64 qwFileSize = GetFileSize(hFile, &dwFileSizeHigh);
+	qwFileSize |= (((__int64)dwFileSizeHigh) << 32);
+	__int64 qwFileSizeEx = qwFileSize;
+	// 关闭文件对象
 	CloseHandle(hFile);
+	// 偏移地址 
+	__int64 qwFileOffset = 0;
+	// 块大小
+	DWORD dwBlockBytes = 10 * dwGran;
+	if (qwFileSize < 10 * dwGran)
+		dwBlockBytes = (DWORD)qwFileSize;
+	while (1)
+	{
+		// 映射视图
+		char* lpbMapAddress = (char*)MapViewOfFile(hMapFile,FILE_MAP_ALL_ACCESS,(DWORD)(qwFileOffset >> 32), (DWORD)(qwFileOffset & 0xFFFFFFFF),
+				dwBlockBytes);
+		if (lpbMapAddress == NULL)
+		{
+			CString str("");
+			str.Format("Failure,err code:%d--%lld--%d",GetLastError(),qwFileOffset,dwBlockBytes);
+			MessageBox(str);
+			TRACE("映射文件映射失败,错误代码:%d\r\n", GetLastError());
+			CloseHandle(hMapFile);
+			return;
+		}
+		// 对映射的视图进行访问
+		for(DWORD i = 0; i < dwBlockBytes; ++i)
+		{
+			char* temp = (lpbMapAddress + i);
+			if (*temp == '\n')
+			{
+				iLast = qwFileOffset + i + 1;
+				g_iIndexList.push_back(iLast);
+			}
+			if (iLast == qwFileSizeEx)
+			{
+				break;
+			}
+		}
+		// 撤消文件映像
+		UnmapViewOfFile(lpbMapAddress);
+		// 修正参数
+		qwFileOffset += dwBlockBytes;
+		if (qwFileOffset + dwBlockBytes > qwFileSizeEx)
+		{
+			dwBlockBytes = qwFileSizeEx - qwFileOffset;
+			if (0 == dwBlockBytes)
+			{
+				break;
+			}
+		}
+		//qwFileSize -= dwBlockBytes;
+	}
+	if (iLast != qwFileSizeEx)
+	{
+		g_iIndexList.push_back(qwFileSizeEx);
+	}
+	
+	CloseHandle(hMapFile);
+	//CloseHandle(hFile);
 }
